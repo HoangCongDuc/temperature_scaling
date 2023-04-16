@@ -37,7 +37,7 @@ class ModelWithTemperature(nn.Module):
         """
         self.cuda()
         nll_criterion = nn.CrossEntropyLoss().cuda()
-        ece_criterion = _ECELoss().cuda()
+        ece_criterion = ECELoss().cuda()
 
         # First: collect all the logits and labels for the validation set
         logits_list = []
@@ -75,7 +75,7 @@ class ModelWithTemperature(nn.Module):
         return self
 
 
-class _ECELoss(nn.Module):
+class ECELoss(nn.Module):
     """
     Calculates the Expected Calibration Error of a model.
     (This isn't necessary for temperature scaling, just a cool metric).
@@ -98,7 +98,7 @@ class _ECELoss(nn.Module):
         """
         n_bins (int): number of confidence interval bins
         """
-        super(_ECELoss, self).__init__()
+        super(ECELoss, self).__init__()
         bin_boundaries = torch.linspace(0, 1, n_bins + 1)
         self.bin_lowers = bin_boundaries[:-1]
         self.bin_uppers = bin_boundaries[1:]
