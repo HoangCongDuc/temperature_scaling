@@ -75,9 +75,9 @@ class ModelWithTemperature(nn.Module):
         return self
     
 
-def get_temperature(logits, labels, max_iter=50,):
+def get_temperature(logits, labels, max_iter=50):
     "Standalone function for temperature scaling on precomputed outputs"
-    temperature = torch.tensor(1.5, dtype=torch.float32, device=logits.device, requires_grad=True)
+    temperature = torch.tensor(1.0, dtype=torch.float32, device=logits.device, requires_grad=True)
     optimizer = optim.LBFGS([temperature], lr=0.01, max_iter=max_iter)
     def eval():
         optimizer.zero_grad()
@@ -87,7 +87,19 @@ def get_temperature(logits, labels, max_iter=50,):
     optimizer.step(eval)
     
     return temperature.cpu().item()
+    
 
+def get_temperature_search(logits, labels):
+    ece_func = ECELoss()
+    temperatures = (torch.arange(500, device=logits.device) + 1) / 100
+    eces = []
+    for temp in temperatures:
+        ece = ece_func(logits / temp, labels)
+        eces.append(ece)
+    eces = torch.cat(eces)
+    ce, idx = torch.min(eces, dim=0)
+    temp_best = temperatures[idx]
+    return temp_best.cpu().item(), ce.cpu().item()
 
 class ECELoss(nn.Module):
     """
