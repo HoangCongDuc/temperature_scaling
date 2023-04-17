@@ -75,20 +75,9 @@ class ModelWithTemperature(nn.Module):
         return self
     
 
-def get_temperature(model, dataloader, max_iter=50, device='cuda'):
-    "Standalone function for temperature scaling"
-    logits = []
-    labels = []
-    for inputs, targets in dataloader:
-        inputs = inputs.to(device)
-        with torch.no_grad():
-            outputs = model(inputs)
-        logits.append(outputs)
-        labels.append(targets)
-    logits = torch.cat(logits, dim=0)
-    labels = torch.cat(labels, dim=0)
-
-    temperature = torch.tensor(1.5, dtype=torch.float32, device=device, requires_grad=True)
+def get_temperature(logits, labels, max_iter=50,):
+    "Standalone function for temperature scaling on precomputed outputs"
+    temperature = torch.tensor(1.5, dtype=torch.float32, device=logits.device, requires_grad=True)
     optimizer = optim.LBFGS([temperature], lr=0.01, max_iter=max_iter)
     def eval():
         optimizer.zero_grad()
