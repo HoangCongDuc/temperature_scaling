@@ -89,17 +89,18 @@ def get_temperature(logits, labels, max_iter=50):
     return temperature.cpu().item()
     
 
-def get_temperature_search(logits, labels):
+def get_temperature_search(logits, labels, temperatures=None):
     ece_func = ECELoss()
-    temperatures = (torch.arange(500, device=logits.device) + 1) / 100
-    eces = []
-    for temp in temperatures:
-        ece = ece_func(logits / temp, labels)
-        eces.append(ece)
-    eces = torch.cat(eces)
-    ce, idx = torch.min(eces, dim=0)
+    if temperatures is None:
+        temperatures = (torch.arange(500, device=logits.device) + 1) / 100
+    logits_with_temp = logits / temperatures[..., None, None]
+    eces = ece_func(logits_with_temp, labels)
+    if temperatures.dim() > 1:
+        temperatures = temperatures.flatten()
+        eces = eces.flatten()
+    ece, idx = torch.min(eces, dim=0)
     temp_best = temperatures[idx]
-    return temp_best.cpu().item(), ce.cpu().item()
+    return temp_best.cpu().item(), ece.cpu().item()
 
 class ECELoss(nn.Module):
     """
@@ -127,21 +128,30 @@ class ECELoss(nn.Module):
         super(ECELoss, self).__init__()
         bin_boundaries = torch.linspace(0, 1, n_bins + 1)
         self.bin_lowers = bin_boundaries[:-1]
+        self.bin_lowers[0] = -1     # Include edge cases with 0 confidence
         self.bin_uppers = bin_boundaries[1:]
 
     def forward(self, logits, labels):
-        softmaxes = F.softmax(logits, dim=1)
-        confidences, predictions = torch.max(softmaxes, 1)
-        accuracies = predictions.eq(labels)
+        softmaxes = F.softmax(logits, dim=-1)
+        confidences, predictions = torch.max(softmaxes, -1)
+        corrects = predictions.eq(labels).float()
 
-        ece = torch.zeros(1, device=logits.device)
-        for bin_lower, bin_upper in zip(self.bin_lowers, self.bin_uppers):
+        device = logits.device
+        temperature_dims = logits.shape[:-2]
+        n_samples = logits.shape[-2]
+        ece = torch.zeros(temperature_dims, device=device)
+        bin_lowers = self.bin_lowers.to(device)
+        bin_uppers = self.bin_uppers.to(device)
+        for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
             # Calculated |confidence - accuracy| in each bin
-            in_bin = confidences.gt(bin_lower.item()) * confidences.le(bin_upper.item())
-            prop_in_bin = in_bin.float().mean()
-            if prop_in_bin.item() > 0:
-                accuracy_in_bin = accuracies[in_bin].float().mean()
-                avg_confidence_in_bin = confidences[in_bin].mean()
-                ece += torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+            in_bin = confidences.gt(bin_lower) * confidences.le(bin_upper)
+            confidence_in_bin = confidences.where(in_bin, torch.tensor(0.0)).sum(dim=-1)            
+            correct_in_bin = corrects.where(in_bin, torch.tensor(0.0)).sum(dim=-1)
+            count_in_bin = in_bin.sum(dim=-1)
+            # prop_in_bin = in_bin.float().mean(dim=-1)
+            # ece_in_bin = torch.abs((confidence_in_bin - correct_in_bin) / count_in_bin)
+            # ece_in_bin *= prop_in_bin
+            ece_in_bin = torch.abs((confidence_in_bin - correct_in_bin) / n_samples) # Reduced from last 3 lines
+            ece += ece_in_bin.where(count_in_bin > 0, torch.tensor(0.0))
 
         return ece
