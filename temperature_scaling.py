@@ -147,22 +147,18 @@ class ECELoss(nn.Module):
         corrects = predictions.eq(labels).float() # (T, N)
 
         device = logits.device
-        temperature_dims = logits.shape[:-2]
         n_samples = logits.shape[-2]
         zeros = torch.tensor(0.0, device=device)
-        ece = torch.zeros(temperature_dims, device=device) # (T,)
         bin_lowers = self.bin_lowers.to(device) # (B,)
         bin_uppers = self.bin_uppers.to(device)
-        for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
-            # Calculated |confidence - accuracy| in each bin
-            in_bin = confidences.gt(bin_lower) * confidences.le(bin_upper) # (T, N)
-            confidence_in_bin = confidences.where(in_bin, zeros).sum(dim=-1) # (T,)
-            correct_in_bin = corrects.where(in_bin, zeros).sum(dim=-1) # (T,)
-            count_in_bin = in_bin.sum(dim=-1) # (T,)
-            # prop_in_bin = in_bin.float().mean(dim=-1)
-            # ece_in_bin = torch.abs((confidence_in_bin - correct_in_bin) / count_in_bin)
-            # ece_in_bin *= prop_in_bin
-            ece_in_bin = torch.abs((confidence_in_bin - correct_in_bin) / n_samples) # Reduced from last 3 lines
-            ece += ece_in_bin.where(count_in_bin > 0, zeros)
+
+        # This part has been vectorized, to see simpler code, check previous versions
+        confidences.unsqueeze_(-1)
+        corrects.unsqueeze_(-1)
+        in_bin = confidences.gt(bin_lowers) * confidences.le(bin_uppers) # (T, N, B)
+        confidence_in_bin = confidences.where(in_bin, zeros).sum(dim=-2) # (T, B)
+        correct_in_bin = corrects.where(in_bin, zeros).sum(dim=-2) # (T, B)
+        ece_in_bin = torch.abs((confidence_in_bin - correct_in_bin) / n_samples).nan_to_num(0, 0, 0)
+        ece = ece_in_bin.sum(dim=-1)
 
         return ece
