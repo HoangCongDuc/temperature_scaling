@@ -93,11 +93,10 @@ def get_temperature_search(logits, labels, temperatures=None):
     ece_func = ECELoss()
     if temperatures is None:
         temperatures = (torch.arange(500, device=logits.device) + 1) / 100
-    logits_with_temp = logits / temperatures[..., None, None]
+    else:
+        temperatures = torch.flatten(temperatures)
+    logits_with_temp = logits / temperatures[:, None, None]
     eces = ece_func(logits_with_temp, labels)
-    if temperatures.dim() > 1:
-        temperatures = temperatures.flatten()
-        eces = eces.flatten()
     ece, idx = torch.min(eces, dim=0)
     temp_best = temperatures[idx]
     return temp_best.cpu().item(), ece.cpu().item()
@@ -132,23 +131,34 @@ class ECELoss(nn.Module):
         self.bin_uppers = bin_boundaries[1:]
 
     def forward(self, logits, labels):
-        softmaxes = F.softmax(logits, dim=-1)
-        confidences, predictions = torch.max(softmaxes, -1)
-        corrects = predictions.eq(labels).float()
+        """
+        logits shape: (T, N, C) or (N, C)
+        labels shape: (N,)
+        T is the number of temperatures, N is number of samples, C is number of classes
+        To compute ECE for a single temperature, divide the model output logits by the temperature and
+        feed to this function together with the labels
+        To compute ECE for multiple temperatures, divide the output logits with each temperature,
+        stack them in the extra first dimension, then feed to this function
+
+        output: Tensor of Size([]) or of Size([T]), one element for each temperature
+        """
+        softmaxes = F.softmax(logits, dim=-1) # (T, N, C)
+        confidences, predictions = torch.max(softmaxes, -1) # (T, N)
+        corrects = predictions.eq(labels).float() # (T, N)
 
         device = logits.device
         temperature_dims = logits.shape[:-2]
         n_samples = logits.shape[-2]
         zeros = torch.tensor(0.0, device=device)
-        ece = torch.zeros(temperature_dims, device=device)
-        bin_lowers = self.bin_lowers.to(device)
+        ece = torch.zeros(temperature_dims, device=device) # (T,)
+        bin_lowers = self.bin_lowers.to(device) # (B,)
         bin_uppers = self.bin_uppers.to(device)
         for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
             # Calculated |confidence - accuracy| in each bin
-            in_bin = confidences.gt(bin_lower) * confidences.le(bin_upper)
-            confidence_in_bin = confidences.where(in_bin, zeros).sum(dim=-1)            
-            correct_in_bin = corrects.where(in_bin, zeros).sum(dim=-1)
-            count_in_bin = in_bin.sum(dim=-1)
+            in_bin = confidences.gt(bin_lower) * confidences.le(bin_upper) # (T, N)
+            confidence_in_bin = confidences.where(in_bin, zeros).sum(dim=-1) # (T,)
+            correct_in_bin = corrects.where(in_bin, zeros).sum(dim=-1) # (T,)
+            count_in_bin = in_bin.sum(dim=-1) # (T,)
             # prop_in_bin = in_bin.float().mean(dim=-1)
             # ece_in_bin = torch.abs((confidence_in_bin - correct_in_bin) / count_in_bin)
             # ece_in_bin *= prop_in_bin
